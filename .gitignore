@@ -1,0 +1,12 @@
+__pycache__
+/predictions
+/checkpoints
+/data
+/preprocessed_data
+/visualizations
+/training_examples
+convert_to_mp3.py
+*.pth
+*.wav
+*.mp3
+*.mov
