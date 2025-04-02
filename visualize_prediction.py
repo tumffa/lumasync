@@ -196,12 +196,12 @@ def process_and_render_video_with_audio(name):
     """
     # Paths for input and output
     path = Path(os.getcwd())
-    visualizations_dir = path / "lumasync" / "visualizations" / name
-    audio_path = next(path.glob(f"lumasync/{name}.*"), None)
+    visualizations_dir = path / "visualizations" / name
+    audio_path = next(path.glob(f"{name}.*"), None)
     if audio_path is None:
         print(f"Error: Audio file not found for {name}.")
         return
-    brightness_path = path / "lumasync" / "predictions" / f"{name}_brightness.npy"
+    brightness_path = path / "predictions" / f"{name}_brightness.npy"
     temp_video_path = visualizations_dir / "temp_video.mp4"
     output_video_path = visualizations_dir / "output_video.mp4"
     separated_audio_dir = visualizations_dir / "separated_audio"
@@ -437,4 +437,4 @@ def detect_brightness_peaks(brightness, pre_max=3, post_max=3, pre_avg=3, post_a
     )
     return peaks
 
-process_and_render_video_with_audio('shsh-na-na')
+process_and_render_video_with_audio('californialove')

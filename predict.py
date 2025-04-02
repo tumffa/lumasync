@@ -14,8 +14,8 @@ def load_model(
     transformer_dim=512, 
     n_layers=6, 
     in_channels=1,
-    max_time_dim=2048,
-    transformer_chunk_size=2048
+    max_time_dim=None,
+    transformer_chunk_size=None
 ):
     """
     Loads the trained LightingModel from a checkpoint.
@@ -114,7 +114,9 @@ def combine_spectrograms(spectrograms_dict, channels):
         # Fallback: empty spectrogram
         return np.zeros((1, n_mels, time_len))
 
-def predict_lighting(audio_path, model_path, output_folder, sr=22050, n_mels=128, hop_length=512, channels=["drums", "bass", "vocals", "other"]):
+def predict_lighting(audio_path, model_path, output_folder, sr=22050, n_mels=128, 
+                     hop_length=512, channels=["drums", "bass", "vocals", "other"],
+                     transformer_dim=512, max_time_dim=None, transformer_chunk_size=None):
     """
     Predicts lighting brightness values for a given audio file.
 
@@ -192,9 +194,9 @@ def predict_lighting(audio_path, model_path, output_folder, sr=22050, n_mels=128
     model = load_model(
         model_path, 
         in_channels=in_channels,
-        transformer_dim=1024,
-        max_time_dim=None,  # No time dimension limitation
-        transformer_chunk_size=None  # No chunking
+        transformer_dim=transformer_dim,
+        max_time_dim=max_time_dim,
+        transformer_chunk_size=transformer_chunk_size
     )
     model = model.to("cuda" if torch.cuda.is_available() else "cpu")
     
@@ -252,10 +254,9 @@ def extract_audio_spectrogram(audio_path, sr=22050, n_mels=128, hop_length=512):
 # Example usage
 if __name__ == "__main__":
     path = Path(os.getcwd())
-    app_path = path / "lumasync"
-    audio_path = app_path / "shsh-na-na.wav"
-    model_path = app_path / "trained_model_drums_bass_other_vocals_dim_1024_b8.pth"  # Path to the trained model
-    output_folder = app_path / "predictions"  # Folder to save predictions
+    audio_path = path / "californialove.wav"
+    model_path = path / "trained_model_drums_bass_other_vocals_dim_1024_b8.pth"  # Path to the trained model
+    output_folder = path / "predictions"  # Folder to save predictions
     
     # Examples of different channel combinations
     
@@ -266,8 +267,8 @@ if __name__ == "__main__":
         output_folder,
         channels=["drums", "bass", "vocals", "other"],
         transformer_dim=1024,
-        max_time_dim=2048,
-        transformer_chunk_size=2048
+        max_time_dim=None,
+        transformer_chunk_size=None
     )
     
     # Example 2: Use drums and bass only

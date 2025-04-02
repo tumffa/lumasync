@@ -62,7 +62,7 @@ class LightingModel(nn.Module):
                 self.make_frontend_block(
                     dim,
                     dim * 2,
-                    partial_transformers=False,
+                    partial_transformers=True,
                     head_dim=head_dim,
                     rotary_embed=rotary_embed,
                     dropout=dropout["frontend"],

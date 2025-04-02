@@ -38,8 +38,8 @@ def start_pipeline(input_folder,
     current_path = Path(os.getcwd())
 
     # Resolve input and output folder paths
-    input_folder = current_path / app_path / input_folder
-    output_folder = current_path / app_path / output_folder
+    input_folder = current_path / input_folder
+    output_folder = current_path / output_folder
 
     # Ensure input folder exists
     if not input_folder.exists():

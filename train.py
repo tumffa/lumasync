@@ -328,7 +328,7 @@ def collate_fn(batch):
     return padded_spectrograms, padded_brightnesses, masks
 
 def train_model(data_folder, epochs=10, batch_size=8, lr=1e-4, resume_from_best=False,
-               channels=["full"], transformer_dim=512, max_time_dim=2048, transformer_chunk_size=2048):
+               channels=["full"], transformer_dim=512, max_time_dim=None, transformer_chunk_size=None):
     """
     Train the lighting model.
     
@@ -355,11 +355,9 @@ def train_model(data_folder, epochs=10, batch_size=8, lr=1e-4, resume_from_best=
     
     print(f"Training model with {in_channels} input channels and transformer_dim={transformer_dim}")
     
-    # Create directories for saving models and checkpoints
-    output_path = Path(os.getcwd()) / "lumasync"
-    checkpoint_path = output_path / "checkpoints"
+    # Create directory for saving models
+    output_path = Path(os.getcwd())
     output_path.mkdir(parents=True, exist_ok=True)
-    checkpoint_path.mkdir(parents=True, exist_ok=True)
     
     # Create a model name based on channels
     model_name = f"model_{'_'.join(channels)}"
@@ -383,13 +381,6 @@ def train_model(data_folder, epochs=10, batch_size=8, lr=1e-4, resume_from_best=
                         print(f"Loaded previous best loss: {best_loss:.6f}")
                 else:
                     model.load_state_dict(checkpoint)
-                
-                # Try to load the final checkpoint to get optimizer and scheduler state
-                final_checkpoint_path = checkpoint_path / f"final_checkpoint_{model_name}.pth"
-                if final_checkpoint_path.exists():
-                    checkpoint = torch.load(final_checkpoint_path)
-                    best_loss = checkpoint.get('loss', best_loss)  # Get the previous best loss
-                    print(f"Loaded previous best loss: {best_loss:.6f}")
             except Exception as e:
                 print(f"Warning: Could not fully load previous state: {e}")
                 print("Starting with freshly initialized model weights")
@@ -464,25 +455,10 @@ def train_model(data_folder, epochs=10, batch_size=8, lr=1e-4, resume_from_best=
         scheduler.step()
         print(f"Epoch {epoch + 1}/{epochs}, Average Loss: {avg_loss:.6f}")
         
-        # Save checkpoint every 3 epochs
-        if (epoch + 1) % 3 == 0:
-            checkpoint_file = checkpoint_path / f"{model_name}_dim_{transformer_dim}_b{batch_size}_epoch_{epoch + 1}.pth"
-            torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'loss': avg_loss,
-                'channels': channels,  # Save channel information
-                'transformer_dim': transformer_dim,  # Save model dimensions
-            }, checkpoint_file)
-            print(f"Checkpoint saved at epoch {epoch+1}: {checkpoint_file}")
-        
         # Save the best model based on loss
         if avg_loss < best_loss:
             best_loss = avg_loss
             best_model_path = output_path / f"best_{model_name}_dim_{transformer_dim}_b{batch_size}.pth"
-            # Save model state dict with additional metadata
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'loss': avg_loss,
@@ -500,19 +476,6 @@ def train_model(data_folder, epochs=10, batch_size=8, lr=1e-4, resume_from_best=
         'transformer_dim': transformer_dim,
     }, final_model_path)
     print(f"Final model saved as '{final_model_path}'")
-    
-    # Also save a complete checkpoint with training state
-    final_checkpoint_path = checkpoint_path / f"final_checkpoint_{model_name}_dim_{transformer_dim}_b{batch_size}.pth"
-    torch.save({
-        'epoch': epochs,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict(),
-        'loss': avg_loss,
-        'channels': channels,
-        'transformer_dim': transformer_dim,
-    }, final_checkpoint_path)
-    print(f"Final checkpoint saved at '{final_checkpoint_path}'")
 
     return final_model_path, best_model_path
 
@@ -521,11 +484,3 @@ if __name__ == "__main__":
     # Train with all 4 separated channels (default)
     train_model("preprocessed_data", epochs=20, batch_size=4, resume_from_best=False,
                channels=["drums", "bass", "vocals", "other"])
-    
-    # Example: Train with only drums and bass
-    # train_model("preprocessed_data", epochs=20, batch_size=4, resume_from_best=False,
-    #           channels=["drums", "bass"])
-    
-    # Example: Train with single-channel combined spectrogram
-    # train_model("preprocessed_data", epochs=20, batch_size=4, resume_from_best=False,
-    #           channels=["combined"])
