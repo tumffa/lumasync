@@ -3,8 +3,11 @@ import librosa
 import subprocess
 import numpy as np
 import cv2
+from pathlib import Path
 from tqdm import tqdm
 from scipy.signal import resample
+import torch
+from beat_this.inference import File2Beats
 
 def extract_audio_spectrogram(video_path, sr=22050, n_mels=128):
     """
@@ -126,16 +129,6 @@ def combine_spectrograms(spectrograms_dict):
     
     return combined
 
-import os
-import librosa
-import subprocess
-import numpy as np
-import cv2
-import torch
-from tqdm import tqdm
-from scipy.signal import resample
-from beat_this.inference import File2Beats
-
 def extract_beat_frames(audio_path, sr=22050, n_mels=128, hop_length=512):
     """
     Extracts beat frames from an audio file using BeatThis.
@@ -209,8 +202,13 @@ def extract_beat_frames(audio_path, sr=22050, n_mels=128, hop_length=512):
 
 def preprocess_data(input_folder, output_folder, sr=22050, n_mels=128, hop_length=512):
     """
-    Preprocesses all video files in the input folder, saving spectrograms, brightness values,
-    and beat frames.
+    Preprocesses all video files in the input folder, saving:
+    - Full audio spectrogram (single-channel)
+    - Individual stem spectrograms (drums, bass, vocals, other)
+    - Combined 4-channel spectrogram
+    - Combined 5-channel spectrogram with beat frames
+    - Beat frames
+    - Brightness values
 
     Args:
         input_folder (str): Path to the folder containing video files.
@@ -229,9 +227,10 @@ def preprocess_data(input_folder, output_folder, sr=22050, n_mels=128, hop_lengt
             video_path = os.path.join(input_folder, file_name)
             base_name = os.path.splitext(file_name)[0]
 
-            # Check for existing files
+            # Define all file paths
             brightness_path = os.path.join(output_folder, f"{base_name}_brightness.npy")
             combined_spec_path = os.path.join(output_folder, f"{base_name}_combined_spectrogram.npy")
+            full_spec_path = os.path.join(output_folder, f"{base_name}_full_spectrogram.npy")  # New: full audio spectrogram
             beat_frames_path = os.path.join(output_folder, f"{base_name}_beatframes.npy")
             audio_path = os.path.join(output_folder, f"{base_name}_audio.wav")
             combined_5ch_path = os.path.join(output_folder, f"{base_name}_combined_5ch_spectrogram.npy")
@@ -244,11 +243,12 @@ def preprocess_data(input_folder, output_folder, sr=22050, n_mels=128, hop_lengt
                     separated_files_exist = False
                     break
             
-            # Skip if all files already exist (including 5-channel spectrogram)
+            # Skip if all files already exist (including full spectrogram)
             if (os.path.exists(brightness_path) and 
                 os.path.exists(combined_spec_path) and 
                 os.path.exists(beat_frames_path) and
                 os.path.exists(combined_5ch_path) and
+                os.path.exists(full_spec_path) and  # Also check for full spectrogram
                 separated_files_exist):
                 print(f"Skipping {file_name}: All preprocessed files already exist.")
                 continue
@@ -260,6 +260,12 @@ def preprocess_data(input_folder, output_folder, sr=22050, n_mels=128, hop_lengt
                     "ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "pcm_s16le", 
                     "-ar", str(sr), "-ac", "1", audio_path
                 ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # Extract full audio spectrogram (non-separated, single channel)
+            if not os.path.exists(full_spec_path) and os.path.exists(audio_path):
+                print(f"Extracting full audio spectrogram for {file_name}")
+                full_spectrogram = extract_audio_spectrogram(audio_path, sr, n_mels, hop_length)
+                np.save(full_spec_path, full_spectrogram)
             
             # Extract beat frames if needed
             if not os.path.exists(beat_frames_path):
@@ -283,7 +289,8 @@ def preprocess_data(input_folder, output_folder, sr=22050, n_mels=128, hop_lengt
             
             # If we need to generate spectrograms, perform audio separation
             if not separated_files_exist or not os.path.exists(combined_spec_path):
-                print(f"Extracting spectrograms for {file_name}")
+                print(f"Extracting stem spectrograms for {file_name}")
+                
                 # Separate audio using HTDemucs
                 separated_tracks = separate_audio_with_htdemucs(video_path, output_folder)
 
@@ -338,6 +345,9 @@ def preprocess_data(input_folder, output_folder, sr=22050, n_mels=128, hop_lengt
                 if os.path.exists(combined_spec_path):
                     combined_spec = np.load(combined_spec_path)
                     reference_length = combined_spec.shape[-1]
+                elif os.path.exists(full_spec_path):
+                    full_spec = np.load(full_spec_path)
+                    reference_length = full_spec.shape[-1]
                 else:
                     # Use the first available track spectrogram
                     track_spec_path = os.path.join(output_folder, f"{base_name}_{track_types[0]}_spectrogram.npy")
@@ -379,7 +389,107 @@ def preprocess_data(input_folder, output_folder, sr=22050, n_mels=128, hop_lengt
                 np.save(combined_5ch_path, combined_5ch)
 
             print(f"Processed {file_name}")
+            
+    # Create a summary file listing all available preprocessed data
+    create_dataset_summary(output_folder)
 
+
+def create_dataset_summary(output_folder):
+    """
+    Creates a summary file listing all preprocessed data files.
+    
+    Args:
+        output_folder (str): Path to the folder with preprocessed data.
+    """
+    summary = {
+        "songs": [],
+        "stats": {
+            "total_songs": 0,
+            "with_full_spectrogram": 0,
+            "with_stems": 0,
+            "with_combined": 0,
+            "with_5ch": 0,
+            "with_beats": 0,
+            "with_brightness": 0
+        }
+    }
+    
+    # Get unique song names (without the suffixes)
+    all_files = os.listdir(output_folder)
+    all_files = [f for f in all_files if f.endswith('.npy')]
+    
+    # Extract base names
+    base_names = set()
+    for file in all_files:
+        parts = file.split('_')
+        if len(parts) > 1:
+            base_name = '_'.join(parts[:-1])  # Remove the last part (spectrogram, brightness, etc.)
+            if base_name.endswith(('_drums', '_bass', '_vocals', '_other')):
+                base_name = '_'.join(base_name.split('_')[:-1])  # Remove stem type
+            base_names.add(base_name)
+    
+    # For each song, check what data we have
+    for base_name in sorted(base_names):
+        song_data = {
+            "name": base_name,
+            "has_full_spectrogram": False,
+            "has_stems": False,
+            "has_combined": False,
+            "has_5ch": False,
+            "has_beats": False,
+            "has_brightness": False
+        }
+        
+        # Check for each type of data
+        if os.path.exists(os.path.join(output_folder, f"{base_name}_full_spectrogram.npy")):
+            song_data["has_full_spectrogram"] = True
+            summary["stats"]["with_full_spectrogram"] += 1
+            
+        stems = ["drums", "bass", "vocals", "other"]
+        has_all_stems = True
+        for stem in stems:
+            if not os.path.exists(os.path.join(output_folder, f"{base_name}_{stem}_spectrogram.npy")):
+                has_all_stems = False
+                break
+        
+        song_data["has_stems"] = has_all_stems
+        if has_all_stems:
+            summary["stats"]["with_stems"] += 1
+            
+        if os.path.exists(os.path.join(output_folder, f"{base_name}_combined_spectrogram.npy")):
+            song_data["has_combined"] = True
+            summary["stats"]["with_combined"] += 1
+            
+        if os.path.exists(os.path.join(output_folder, f"{base_name}_combined_5ch_spectrogram.npy")):
+            song_data["has_5ch"] = True
+            summary["stats"]["with_5ch"] += 1
+            
+        if os.path.exists(os.path.join(output_folder, f"{base_name}_beatframes.npy")):
+            song_data["has_beats"] = True
+            summary["stats"]["with_beats"] += 1
+            
+        if os.path.exists(os.path.join(output_folder, f"{base_name}_brightness.npy")):
+            song_data["has_brightness"] = True
+            summary["stats"]["with_brightness"] += 1
+        
+        summary["songs"].append(song_data)
+    
+    summary["stats"]["total_songs"] = len(summary["songs"])
+    
+    # Save the summary as JSON
+    import json
+    with open(os.path.join(output_folder, "dataset_summary.json"), 'w') as f:
+        json.dump(summary, f, indent=2)
+    
+    # Print summary stats
+    print(f"\nDataset Summary:")
+    print(f"Total songs: {summary['stats']['total_songs']}")
+    print(f"With full spectrogram: {summary['stats']['with_full_spectrogram']}")
+    print(f"With all stems: {summary['stats']['with_stems']}")
+    print(f"With combined spectrogram: {summary['stats']['with_combined']}")
+    print(f"With 5-channel spectrogram: {summary['stats']['with_5ch']}")
+    print(f"With beat frames: {summary['stats']['with_beats']}")
+    print(f"With brightness data: {summary['stats']['with_brightness']}")
 # Modified to include hop_length parameter
 def extract_audio_spectrogram(video_path, sr=22050, n_mels=128, hop_length=512):
     """
@@ -405,4 +515,5 @@ def extract_audio_spectrogram(video_path, sr=22050, n_mels=128, hop_length=512):
 
 # Example usage
 if __name__ == "__main__":
-    preprocess_data("LIGHTshows", "preprocessed_data", hop_length=512)
+    path = Path(os.getcwd()) / "lumasync"
+    preprocess_data(str(path / "data"), str(path / "preprocessed_data"), sr=22050, n_mels=128, hop_length=512)

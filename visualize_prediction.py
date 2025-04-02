@@ -186,80 +186,6 @@ def create_brightness_representations(brightness, fps=30):
 
     return representations
 
-# Add extract_beat_frames function for beat detection
-def extract_beat_frames(audio_path, sr=22050, hop_length=512):
-    """
-    Extracts beat frames from audio using BeatThis or librosa fallback.
-    
-    Parameters:
-    - audio_path: Path to the audio file.
-    - sr: Sample rate for audio processing.
-    - hop_length: Hop length for spectral processing.
-    
-    Returns:
-    - Numpy array of beat frames with shape [time]
-    """
-    print(f"Extracting beat frames from {os.path.basename(audio_path)}...")
-    
-    try:
-        # Try to import BeatThis
-        from beat_this.inference import File2Beats
-        print("Using BeatThis for beat detection")
-        
-        # Initialize BeatThis model
-        file2beats = File2Beats(
-            checkpoint_path="final0", 
-            device="cuda" if torch.cuda.is_available() else "cpu", 
-            dbn=False
-        )
-        
-        # Get beat and downbeat times
-        beats, downbeats = file2beats(audio_path)
-        print(f"Found {len(beats)} beats and {len(downbeats)} downbeats")
-        
-        # Load audio to get duration and calculate total frames
-        y, sr_loaded = librosa.load(audio_path, sr=sr)
-        total_frames = 1 + len(y) // hop_length
-        audio_duration = len(y) / sr_loaded
-        
-        # Create beat activation frames
-        beat_frames = np.zeros(total_frames)
-        
-        # Convert beat times to frame indices
-        for beat_time in beats:
-            if beat_time < audio_duration:
-                frame_idx = int(beat_time * sr / hop_length)
-                if frame_idx < total_frames:
-                    beat_frames[frame_idx] = 0.8  # Regular beats
-                    
-        # Convert downbeat times to frame indices with higher activation
-        for downbeat_time in downbeats:
-            if downbeat_time < audio_duration:
-                frame_idx = int(downbeat_time * sr / hop_length)
-                if frame_idx < total_frames:
-                    beat_frames[frame_idx] = 1.0  # Downbeats (stronger)
-        
-        # Apply smoothing to create slight ramp around beats
-        beat_frames = gaussian_filter1d(beat_frames, sigma=1.0)
-        
-    except (ImportError, Exception) as e:
-        print(f"Error using BeatThis: {e}. Falling back to librosa beat tracking.")
-        
-        # Fall back to librosa for beat detection
-        y, sr_loaded = librosa.load(audio_path, sr=sr)
-        tempo, beat_frames_idx = librosa.beat.beat_track(y=y, sr=sr_loaded, hop_length=hop_length)
-        
-        # Create binary beat activation
-        total_frames = 1 + len(y) // hop_length
-        beat_frames = np.zeros(total_frames)
-        beat_frames[beat_frames_idx] = 1.0
-        
-        # Apply smoothing
-        beat_frames = gaussian_filter1d(beat_frames, sigma=1.0)
-    
-    return beat_frames
-
-
 def process_and_render_video_with_audio(name):
     """
     Processes the audio and prediction data, renders a video with meter bars on a black screen,
@@ -300,10 +226,6 @@ def process_and_render_video_with_audio(name):
     print("Loading audio and prediction data...")
     audio, sr = librosa.load(new_audio_path, sr=None)
     predicted_brightness = np.load(brightness_path)
-    
-    # Extract beat frames directly
-    beat_frames = extract_beat_frames(str(new_audio_path), sr=sr)
-    print(f"Generated beat frames with shape {beat_frames.shape}")
     
     # Create multiple representations of brightness
     fps = 30
@@ -360,14 +282,6 @@ def process_and_render_video_with_audio(name):
                 np.arange(rep_length),
                 brightness_representations[key]
             )
-    
-    # Synchronize beat frames with video frames
-    if len(beat_frames) != total_frames:
-        beat_frames = np.interp(
-            np.linspace(0, len(beat_frames) - 1, total_frames),
-            np.arange(len(beat_frames)),
-            beat_frames
-        )
 
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(str(temp_video_path), fourcc, fps, (width, height))
@@ -394,7 +308,6 @@ def process_and_render_video_with_audio(name):
         "MovAvg (4s)": (150, 0, 150),      # Darker pink
         "Peak Density": (0, 128, 255),     # Orange
         "Onset Strength": (0, 255, 128),   # Teal
-        "BeatThis Beats": (221, 160, 221)  # Plum color for beat frames
     }
 
     print("Rendering video with meters...")
@@ -417,41 +330,7 @@ def process_and_render_video_with_audio(name):
 
         # Add separator line
         cv2.line(frame, (500, height//2 - max_height - 20), (500, height//2 + 20), (50, 50, 50), 2)
-        
-        # Add BeatThis beats bar - place it after the separator but before the brightness representations
-        if frame_index < len(beat_frames):
-            beat_value = beat_frames[frame_index]
-            bar_height = int(beat_value * max_height)
-            bar_x = 525  # Position it just after the separator
-            bar_y = height // 2 - bar_height
-            color = colors.get("BeatThis Beats", (221, 160, 221))  # Plum color
-            
-            # Draw the beat frame bar
-            cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_width, height // 2), color, -1)
-            
-            # Add a glowing effect when beat is active
-            if beat_value > 0.3:  # Threshold for "active" beat
-                glow_intensity = int(255 * beat_value)
-                # Draw concentric rectangles with decreasing opacity
-                for i in range(1, 6):
-                    glow_alpha = 0.8 - (i * 0.15)  # Decrease opacity for outer rectangles
-                    glow_color = tuple(int(c * glow_alpha) for c in color)
-                    padding = i * 2
-                    cv2.rectangle(frame, 
-                              (bar_x - padding, bar_y - padding), 
-                              (bar_x + bar_width + padding, height // 2 + padding),
-                              glow_color, 1)
-            
-            # Add beat value as text
-            cv2.putText(frame, f"{beat_value:.2f}", (bar_x, height // 2 - max_height - 10),
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            
-            # Add label
-            cv2.putText(frame, "BeatThis", (bar_x, height // 2 + 20),
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        
-        # Render bars for each brightness representation
-        # Adjust the starting position to account for the beat frames bar
+
         brightness_start_x = 580
         for i, (key, values) in enumerate(brightness_representations.items()):
             if frame_index < len(values):
@@ -558,14 +437,4 @@ def detect_brightness_peaks(brightness, pre_max=3, post_max=3, pre_avg=3, post_a
     )
     return peaks
 
-def fade_effect(frame_index, beat_frame, fade_duration, fps):
-    """
-    Calculate the fade-in and fade-out effect for a beat.
-    """
-    fade_frames = int(fade_duration * fps)
-    distance = abs(frame_index - beat_frame)
-    if distance > fade_frames:
-        return 0  # Outside fade range
-    return 1 - (distance / fade_frames)  # Linear fade
-
-process_and_render_video_with_audio('stillcounting')
+process_and_render_video_with_audio('shsh-na-na')
