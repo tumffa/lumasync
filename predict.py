@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from model import LightingModel
 from scipy.ndimage import gaussian_filter1d
+from seperate_drums import separate_drums_with_larsnet
 
 def load_model(
     model_path, 
@@ -128,6 +129,7 @@ def predict_lighting(audio_path, model_path, output_folder, sr=22050, n_mels=128
         n_mels (int): Number of Mel bands.
         hop_length (int): Hop length for spectrogram.
         channels (list): List of audio channels to use. Default is all stems.
+                         Use "drums2" for LarsNet-processed drums.
     """
     audio_path = Path(audio_path)
     model_path = Path(model_path)
@@ -141,7 +143,8 @@ def predict_lighting(audio_path, model_path, output_folder, sr=22050, n_mels=128
 
     # Process audio to get spectrograms
     use_full = "full" in channels
-    stem_channels = [ch for ch in channels if ch != "full"]
+    use_drums2 = "drums2" in channels
+    stem_channels = [ch for ch in channels if ch != "full" and ch != "drums2"]
     
     all_spectrograms = {}
     
@@ -150,11 +153,19 @@ def predict_lighting(audio_path, model_path, output_folder, sr=22050, n_mels=128
         full_spectrogram = extract_audio_spectrogram(audio_path, sr, n_mels, hop_length)
         all_spectrograms["full"] = full_spectrogram
     
-    if stem_channels:
-        print(f"Separating audio tracks using HTDemucs for {', '.join(stem_channels)}...")
+    # Handle both regular stems and drums2 processing
+    if stem_channels or use_drums2:
+        print(f"Separating audio tracks using HTDemucs...")
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
+                # Need to extract drums if we need drums2
+                stems_to_extract = stem_channels.copy()
+                if use_drums2 and "drums" not in stems_to_extract:
+                    stems_to_extract.append("drums")
+                    
                 separated_tracks = separate_audio_with_htdemucs(audio_path, temp_dir)
+                
+                # Process regular stem channels
                 for track_name in stem_channels:
                     if track_name in separated_tracks and os.path.exists(separated_tracks[track_name]):
                         print(f"Processing {track_name} track...")
@@ -164,6 +175,52 @@ def predict_lighting(audio_path, model_path, output_folder, sr=22050, n_mels=128
                         all_spectrograms[track_name] = stem_spectrogram
                     else:
                         print(f"Warning: {track_name} track not found or separation failed.")
+                
+                # Process drums2 using LarsNet if requested
+                if use_drums2:
+                    drums_path = separated_tracks.get("drums")
+                    if drums_path and os.path.exists(drums_path):
+                        print("Processing drums with LarsNet to generate drums2...")
+                        try:
+                            # Create a directory for LarsNet output within the temp dir
+                            larsnet_output_dir = os.path.join(temp_dir, "larsnet_output")
+                            os.makedirs(larsnet_output_dir, exist_ok=True)
+                            
+                            # Run LarsNet on the drums track
+                            larsnet_waveform, waveform_sr = separate_drums_with_larsnet(
+                                drum_audio_path=drums_path,
+                                output_dir=larsnet_output_dir,
+                                wiener_filter=1.0,
+                                device="cuda:0" if torch.cuda.is_available() else "cpu"
+                            )
+                            
+                            # Resample if necessary to match target sr
+                            if waveform_sr != sr:
+                                print(f"Resampling drums2 audio from {waveform_sr}Hz to {sr}Hz")
+                                larsnet_waveform = librosa.resample(larsnet_waveform, orig_sr=waveform_sr, target_sr=sr)
+                            
+                            # Generate spectrogram from the waveform
+                            print("Generating drums2 spectrogram...")
+                            larsnet_spectrogram = librosa.feature.melspectrogram(
+                                y=larsnet_waveform, sr=sr, n_mels=n_mels, hop_length=hop_length
+                            )
+                            log_larsnet_spectrogram = librosa.power_to_db(larsnet_spectrogram, ref=np.max)
+                            # Normalize the spectrogram
+                            log_larsnet_spectrogram = (log_larsnet_spectrogram - log_larsnet_spectrogram.mean()) / log_larsnet_spectrogram.std()
+                            
+                            all_spectrograms["drums2"] = log_larsnet_spectrogram
+                            print(f"Drums2 spectrogram created with shape {log_larsnet_spectrogram.shape}")
+                        except Exception as e:
+                            print(f"Error generating drums2 with LarsNet: {e}")
+                            print("Falling back to regular drums track for drums2...")
+                            if "drums" in separated_tracks and os.path.exists(separated_tracks["drums"]):
+                                drums_spectrogram = extract_audio_spectrogram(
+                                    separated_tracks["drums"], sr, n_mels, hop_length
+                                )
+                                all_spectrograms["drums2"] = drums_spectrogram
+                    else:
+                        print("Warning: Drums track not found. Cannot generate drums2.")
+                
             except Exception as e:
                 print(f"Error during source separation: {e}")
                 if not use_full:
@@ -254,37 +311,16 @@ def extract_audio_spectrogram(audio_path, sr=22050, n_mels=128, hop_length=512):
 # Example usage
 if __name__ == "__main__":
     path = Path(os.getcwd())
-    audio_path = path / "californialove.wav"
-    model_path = path / "trained_model_drums_bass_other_vocals_dim_1024_b8.pth"  # Path to the trained model
-    output_folder = path / "predictions"  # Folder to save predictions
+    audio_path = path / "cloudsovercali.mp3"
+    model_path = path / "best_model_drums2_bass_other_vocals_dim_1024_b8.pth"
+    output_folder = path / "predictions"
     
-    # Examples of different channel combinations
-    
-    # Example 1: Use only full audio
     predict_lighting(
         audio_path, 
         model_path, 
         output_folder,
-        channels=["drums", "bass", "vocals", "other"],
+        channels=["drums2", "bass", "other", "vocals"],
         transformer_dim=1024,
         max_time_dim=None,
         transformer_chunk_size=None
     )
-    
-    # Example 2: Use drums and bass only
-    # predict_lighting(
-    #     audio_path, 
-    #     model_path, 
-    #     output_folder,
-    #     channels=["drums", "bass"],
-    #     transformer_dim=512
-    # )
-    
-    # Example 3: Use all available stems
-    # predict_lighting(
-    #     audio_path, 
-    #     model_path, 
-    #     output_folder,
-    #     channels=["drums", "bass", "vocals", "other"],
-    #     transformer_dim=512
-    # )

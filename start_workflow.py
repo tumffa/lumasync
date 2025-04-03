@@ -66,15 +66,15 @@ def start_pipeline(input_folder,
 
 # Example usage
 if __name__ == "__main__":
-    input_folder = "data"  # Folder containing `.mov` files (relative to current directory)
+    input_folder = "data"  # Folder containing data files (relative to current directory)
     output_folder = "preprocessed_data"  # Folder to save preprocessed data (relative to current directory)
     start_pipeline(input_folder, 
                    output_folder, 
-                   epochs=10, 
+                   epochs=15, 
                    batch_size=8, 
                    lr=1e-4, 
                    resume_from_best=False,
                     transformer_dim=1024,
-                    channels=["drums", "bass", "other", "vocals"],
+                    channels=["drums2", "bass", "other", "vocals"],
                     max_time_dim=None,
                     transformer_chunk_size=None)

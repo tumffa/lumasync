@@ -37,7 +37,7 @@ class LightingDataset(Dataset):
         # Process all spectrogram files
         for file in all_files:
             # Check if this is a spectrogram file for any supported channel
-            for channel in ["full", "drums", "bass", "vocals", "other"]:
+            for channel in ["full", "drums", "bass", "vocals", "other", "drums2"]:
                 if file.endswith(f"_{channel}_spectrogram.npy"):
                     # Extract base name (everything before the channel marker)
                     base_name = file.replace(f"_{channel}_spectrogram.npy", "")
@@ -76,7 +76,7 @@ class LightingDataset(Dataset):
         total_songs = len(self.song_specs)
         
         # Count songs with each channel type
-        channel_counts = {channel: 0 for channel in ["full", "drums", "bass", "vocals", "other"]}
+        channel_counts = {channel: 0 for channel in ["full", "drums", "bass", "vocals", "other", "drums2"]}
         for data in self.song_specs.values():
             for channel in data["channels"]:
                 channel_counts[channel] += 1
@@ -482,5 +482,5 @@ def train_model(data_folder, epochs=10, batch_size=8, lr=1e-4, resume_from_best=
 # Example usage
 if __name__ == "__main__":
     # Train with all 4 separated channels (default)
-    train_model("preprocessed_data", epochs=20, batch_size=4, resume_from_best=False,
-               channels=["drums", "bass", "vocals", "other"])
+    train_model("preprocessed_data", epochs=10, batch_size=4, resume_from_best=False,
+               channels=["full"])
